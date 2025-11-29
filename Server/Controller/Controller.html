@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>UE5 Joystick + Gyro Controller</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.2/nipplejs.min.js"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #1a202c;
+      color: #e2e8f0;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+      -webkit-user-select: none; 
+      user-select: none;         
+      touch-action: none;       
+    }
+    .joystick-zone {
+      background-color: rgba(255, 255, 255, 0.1);
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      backdrop-filter: blur(5px);
+      box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.3);
+      position: relative;
+    }
+    .nipple {
+      background-color: rgba(255, 255, 255, 0.8) !important;
+      box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+      transform: scale(1.2);
+    }
+
+    .control-btn { touch-action: none; -ms-touch-action: none; }
+  </style>
+</head>
+<body class="pb-15 px-4 sm:px-8">
+
+  <div id="status" class="mb-4 text-center text-sm font-semibold rounded-full px-4 py-2">
+    Connecting...
+  </div>
+
+  <div class="flex items-end justify-between w-full p-4 mb-4">
+    <div id="leftStick" class="joystick-zone w-36 h-36 md:w-48 md:h-48"></div>
+    <div class="flex-grow"></div>
+    <div id="rightStick" class="joystick-zone w-36 h-36 md:w-48 md:h-48"></div>
+  </div>
+
+  <div class="absolute bottom-[15rem] right-[5rem] flex flex-col items-center space-y-4">
+    <button id="btnC" class="control-btn bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-white font-bold p-4 rounded-full shadow-lg">Jump</button>
+    <div class="flex space-x-4">
+      <button id="btnA" class="control-btn bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-white font-bold p-4 rounded-full shadow-lg">Grab</button>
+      <button id="btnB" class="control-btn bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-white font-bold p-4 rounded-full shadow-lg">Throw</button>
+    </div>
+  </div>
+
+  <button id="enableGyro" class="fixed top-10 left-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg z-50">
+    Enable Gyroscope
+  </button>
+
+  <script>
+    // ---------------------------
+    // WebSocket
+    // ---------------------------
+    const wsUrl = "ws://<YOUR_LOCAL_IP>:8081";
+    let ws = null;
+    const statusElement = document.getElementById("status");
+
+    function updateStatus(message, color) {
+      statusElement.textContent = message;
+      statusElement.className = `mb-4 text-center text-sm font-semibold rounded-full px-4 py-2 ${color}`;
+    }
+
+    function connectWebSocket() {
+      if (ws) ws.close();
+      updateStatus("Connecting...", "bg-yellow-500 text-yellow-900");
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        updateStatus("WS Error", "bg-red-500 text-red-900");
+        console.error("WebSocket construction error", e);
+        return;
+      }
+      ws.onopen = () => updateStatus("Connected", "bg-green-500 text-green-900");
+      ws.onclose = () => {
+        updateStatus("Disconnected. Reconnecting...", "bg-red-500 text-red-900");
+        setTimeout(connectWebSocket, 3000);
+      };
+      ws.onerror = (e) => {
+        updateStatus("Error", "bg-red-500 text-red-900");
+        console.error("WebSocket error", e);
+      };
+      ws.onmessage = (m) => {
+      };
+    }
+    window.addEventListener("load", connectWebSocket);
+
+    function sendData(data) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify(data));
+        } catch (e) {
+          console.warn("Send failed", e);
+        }
+      }
+    }
+    // ---------------------------
+    // Joysticks (nipplejs)
+    // ---------------------------
+    const deadZone = 0.1;
+    const leftStick = nipplejs.create({
+      zone: document.getElementById("leftStick"),
+      mode: "static",
+      position: { left: "50%", bottom: "50%" },
+      color: "white",
+      size: window.innerWidth < 600 ? 130 : 150
+    });
+    const rightStickZone = document.getElementById("rightStick");
+    let rightStick = nipplejs.create({
+      zone: rightStickZone,
+      mode: "static",
+      position: { right: "50%", bottom: "50%" },
+      color: "white",
+      size: window.innerWidth < 600 ? 130 : 150
+    });
+
+    function attachRightStickHandlers() { 
+      rightStick.off("move"); 
+      rightStick.off("end");
+      rightStick.on("move", (_, data) => {
+        if (data?.vector) {
+          let x = +data.vector.x.toFixed(2);
+          let y = +data.vector.y.toFixed(2);
+          if (Math.abs(x) < deadZone) x = 0;
+          if (Math.abs(y) < deadZone) y = 0;
+          sendData({ type: "right", x, y });
+        }
+      });
+
+      rightStick.on("end", () => sendData({ type: "right", x: 0, y: 0 }));
+
+    }
+    attachRightStickHandlers();
+
+    leftStick.on("move", (_, data) => {
+      if (data?.vector) {
+        let x = +data.vector.x.toFixed(2);
+        let y = +data.vector.y.toFixed(2);
+        if (Math.abs(x) < deadZone) x = 0;
+        if (Math.abs(y) < deadZone) y = 0;
+        sendData({ type: "left", x, y });
+      }
+    });
+
+    leftStick.on("end", () => sendData({ type: "left", x: 0, y: 0 }));
+
+    ["A", "B", "C"].forEach((id) => {
+      const btn = document.getElementById("btn" + id);
+      let activePointers = new Set(); 
+      btn.addEventListener("pointerdown", (e) => {
+        if (activePointers.has(e.pointerId)) return;
+        activePointers.add(e.pointerId);
+        sendData({ type: "button", id, pressed: true });
+      });
+      btn.addEventListener("pointerup", (e) => { 
+        if (!activePointers.has(e.pointerId)) return; 
+        activePointers.delete(e.pointerId);
+        sendData({ type: "button", id, pressed: false });
+      });
+      btn.addEventListener("pointercancel", (e) => { 
+        if (activePointers.has(e.pointerId)) {
+          activePointers.delete(e.pointerId);
+          sendData({ type: "button", id, pressed: false });
+        }
+      });
+      btn.addEventListener("click", (e) => e.preventDefault(), { passive: true });
+    });
+
+    // ---------------------------
+    // Gyroscope (Tilt Camera style)
+    // ---------------------------
+    let isGyroEnabled = false;
+    let initialYaw = null;   // gamma baseline (left-right tilt)
+    let initialPitch = null; // beta baseline (front-back tilt)
+
+    const smoothing = 0.08;      // smooth factor [0..1]
+    const maxTilt = 180;         // degrees that map to full -1..1
+
+    const strength = 0.85;      // overall strength multiplier
+    const sendIntervalMs = 50;  // throttle send (20Hz)
+    let lastSendTime = 0;
+
+    let smoothedX = 0;
+    let smoothedY = 0;
+
+    let camYaw = 0;   // full 360 yaw
+    let camPitch = 0; // full 360 pitch
+
+
+    const enableGyroBtn = document.getElementById("enableGyro");
+    const angle = screen.orientation.angle;
+
+
+    function disableRightStickInput() { 
+      rightStick.off("move");
+      rightStick.off("end");
+      rightStickZone.style.opacity = "0.15";
+      rightStickZone.style.pointerEvents = "none";
+    }
+    function enableRightStickInput() { 
+      rightStickZone.style.opacity = "1";
+      rightStickZone.style.pointerEvents = "auto";
+      attachRightStickHandlers();
+    }
+
+function handleMotion(event) {
+  if (!isGyroEnabled) return;
+
+  const r = event.rotationRate;
+  if (!r) return;
+
+  let yawRate = r.gamma || 0;   // left/right
+  let pitchRate = r.beta || 0;  // up/down
+
+  const dt = sendIntervalMs / 1000; 
+
+  // sensitivity 
+  const yawSensitivity = 0.25;   // change for faster turning
+  const pitchSensitivity = 0.25; // change for faster up/down
+  const speedFactor = 2.0;   // adjust 1.2 - 2.0 based on feel
+  const yawFrame = yawRate / 60;
+  const pitchFrame = pitchRate / 60;
+
+  yawRate = yawRate * -1;
+  yawRate = yawRate * speedFactor;
+
+  pitchRate = pitchRate * speedFactor;  
+
+  camYaw += yawRate * yawSensitivity * dt;
+  camPitch += pitchRate * pitchSensitivity * dt;
+
+  camPitch = Math.max(-89, Math.min(89, camPitch));
+
+  camYaw = ((camYaw % 360) + 360) % 360;
+
+  if (initialYaw === null) initialYaw = camYaw;
+
+  let deltaYaw = camYaw - initialYaw;
+  let nx = deltaYaw / 180;
+  let ny = camPitch / 90;
+
+  deltaYaw = ((deltaYaw + 180) % 360) - 180;
+
+  smoothedX += (nx - smoothedX) * 0.25;
+  smoothedY += (ny - smoothedY) * 0.25;
+
+  const now = Date.now();
+  if (now - lastSendTime < sendIntervalMs) return;
+  lastSendTime = now;
+
+  sendData({
+    type: "right",
+    x: smoothedX.toFixed(4),
+    y: (-smoothedY).toFixed(4)
+  });
+}
+
+  function startGyroListener() {
+    if (isGyroEnabled) return;
+
+    const start = () => {
+      isGyroEnabled = true;
+      smoothedX = 0;
+      smoothedY = 0;
+
+      window.addEventListener("devicemotion", handleMotion);
+      disableRightStickInput();
+      enableGyroBtn.textContent = "Gyro: ON (tap to stop)";
+      enableGyroBtn.classList.replace("bg-blue-600", "bg-green-600");
+    };
+
+    if (typeof DeviceMotionEvent.requestPermission === "function") {
+      DeviceMotionEvent.requestPermission().then(r => {
+        if (r === "granted") start();
+        else alert("Permission denied");
+      });
+    } else {
+      start();
+    }
+  
+}
+    function stopGyroListener() {
+      if (!isGyroEnabled) return;
+      isGyroEnabled = false;
+      window.removeEventListener("devicemotion", handleMotion);
+      enableGyroBtn.textContent = "Enable Gyroscope";
+      enableGyroBtn.classList.replace("bg-green-600", "bg-blue-600");
+      initialYaw = null;
+      initialPitch = null;
+      sendData({ type: "right", x: 0, y: 0 });
+      enableRightStickInput();
+    }
+
+    enableGyroBtn.addEventListener("click", () => {
+      if (isGyroEnabled) stopGyroListener();
+      else startGyroListener();
+    });
+
+    window.addEventListener("pagehide", () => {
+      if (isGyroEnabled) stopGyroListener();
+      if (ws) ws.close();
+    });
+
+  </script>
+</body>
+</html>
